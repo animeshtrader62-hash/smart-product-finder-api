@@ -1,8 +1,19 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+from pydantic import BaseModel
 import json
 import os
+import httpx
+
+# EarnKaro API Configuration
+EARNKARO_API = {
+    'url': 'https://ekaro-api.affiliaters.in/api/converter/public',
+    'token': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTM0MDg5MzlkOTM5ZWQyMDI5YTZhZTkiLCJlYXJua2FybyI6IjQ3MTI3OTAiLCJpYXQiOjE3NjUwMTgzMDR9.CV4yf6iQ2IZ2RHv8FIWbzHROu4bnV1RRvgTa_JmvSFI'
+}
+
+class ConvertRequest(BaseModel):
+    url: str
 
 app = FastAPI(
     title="Smart Product Finder API",
@@ -161,6 +172,57 @@ def get_product(product_id: int):
         if product["id"] == product_id:
             return {"success": True, "product": product}
     return {"success": False, "message": "Product not found"}
+
+
+@app.post("/convert")
+async def convert_to_affiliate(request: ConvertRequest):
+    """Convert any URL to EarnKaro affiliate link"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {
+                'Authorization': f'Bearer {EARNKARO_API["token"]}',
+                'Content-Type': 'application/json'
+            }
+            payload = {
+                'deal': request.url,
+                'convert_option': 'convert_only'
+            }
+            
+            response = await client.post(EARNKARO_API['url'], headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') == 1:
+                    return {
+                        "success": True,
+                        "affiliate_url": data.get('data', request.url),
+                        "original_url": request.url
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": data.get('message', 'Conversion failed'),
+                        "original_url": request.url
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": f"API error: {response.status_code}",
+                    "original_url": request.url
+                }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "original_url": request.url
+        }
+
+
+@app.get("/convert")
+async def convert_to_affiliate_get(url: str = Query(..., description="URL to convert")):
+    """Convert any URL to EarnKaro affiliate link (GET version)"""
+    request = ConvertRequest(url=url)
+    return await convert_to_affiliate(request)
 
 
 # For running with: python main.py
