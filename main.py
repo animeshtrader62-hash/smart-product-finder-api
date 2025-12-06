@@ -57,8 +57,9 @@ def home():
 
 @app.get("/search")
 def search_products(
-    platform: Optional[str] = Query(None, description="Platform: Flipkart, Myntra, Amazon"),
-    category: Optional[str] = Query(None, description="Category: Shoes, T-Shirt, Electronics, etc."),
+    q: Optional[str] = Query(None, description="Full text search query"),
+    platform: Optional[str] = Query(None, description="Platform: Flipkart, Myntra, Ajio"),
+    category: Optional[str] = Query(None, description="Category: Smartphones, Laptops, Shoes, etc."),
     brand: Optional[str] = Query(None, description="Brand name"),
     min_price: Optional[int] = Query(None, description="Minimum price", ge=0),
     max_price: Optional[int] = Query(None, description="Maximum price", ge=0),
@@ -68,10 +69,20 @@ def search_products(
     limit: Optional[int] = Query(50, description="Maximum results to return", ge=1, le=100)
 ):
     """
-    Search products with multiple filters.
+    Search products with multiple filters and full-text search.
     Returns matching products with affiliate links.
     """
     results = PRODUCTS.copy()
+    
+    # Full-text search across title, brand, category, description
+    if q:
+        q_lower = q.lower()
+        results = [p for p in results if 
+            q_lower in p.get("title", "").lower() or
+            q_lower in p.get("brand", "").lower() or
+            q_lower in p.get("category", "").lower() or
+            q_lower in p.get("description", "").lower()
+        ]
 
     # Apply filters
     if platform:
@@ -113,6 +124,7 @@ def search_products(
         "success": True,
         "count": len(results),
         "filters_applied": {
+            "q": q,
             "platform": platform,
             "category": category,
             "brand": brand,
