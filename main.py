@@ -78,28 +78,14 @@ def build_myntra_url(search: str, brand: str = None, price_min: int = 0,
 
 def build_ajio_url(query: str, brand: str = None, price_min: int = 0,
                    price_max: int = 999999, discount: int = 0) -> str:
-    """Build Ajio URL with filters"""
-    # Ajio uses path-based search
-    search_path = query.lower().replace(" ", "-")
-    url = f"https://www.ajio.com/search/?text={urllib.parse.quote(query)}"
-    
-    # Add filters as URL params
-    params = []
-    
+    """Build Ajio URL with filters - simplified to avoid blocks"""
+    # Ajio blocks complex URLs, use simple search
+    search_query = query
     if brand and brand.lower() not in ["all", "all brands", ""]:
-        params.append(f"brand={urllib.parse.quote(brand)}")
+        search_query = f"{brand} {query}"
     
-    if price_max < 999999:
-        params.append(f"minprice={price_min}")
-        params.append(f"maxprice={price_max}")
-    
-    if discount:
-        params.append(f"discount={discount}")
-    
-    params.append("sortby=discount-desc")
-    
-    if params:
-        url += "&" + "&".join(params)
+    # Use simple search URL that Ajio accepts
+    url = f"https://www.ajio.com/search/?text={urllib.parse.quote(search_query)}"
     
     return url
 
