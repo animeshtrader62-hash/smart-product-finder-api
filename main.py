@@ -5,15 +5,114 @@ from pydantic import BaseModel
 import json
 import os
 import httpx
+import urllib.parse
+import re
 
 # EarnKaro API Configuration
-EARNKARO_API = {
-    'url': 'https://ekaro-api.affiliaters.in/api/converter/public',
-    'token': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTM0MDg5MzlkOTM5ZWQyMDI5YTZhZTkiLCJlYXJua2FybyI6IjQ3MTI3OTAiLCJpYXQiOjE3NjUwMTgzMDR9.CV4yf6iQ2IZ2RHv8FIWbzHROu4bnV1RRvgTa_JmvSFI'
-}
+EARNKARO_TOKEN = os.getenv("EARNKARO_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTM0MDg5MzlkOTM5ZWQyMDI5YTZhZTkiLCJlYXJua2FybyI6IjQ3MTI3OTAiLCJpYXQiOjE3NjUwMTgzMDR9.CV4yf6iQ2IZ2RHv8FIWbzHROu4bnV1RRvgTa_JmvSFI")
+FK_AFFILIATE_ID = os.getenv("FK_AFFILIATE_ID", "desideals")
+FK_AFFEXT_ID = os.getenv("FK_AFFEXT_ID", "ext1")
 
 class ConvertRequest(BaseModel):
     url: str
+
+class DirectLinkRequest(BaseModel):
+    store: str  # flipkart or myntra
+    query: str
+    brand: Optional[str] = None
+    price_min: Optional[int] = 0
+    price_max: Optional[int] = 999999
+    discount: Optional[int] = 0
+    color: Optional[str] = None
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# URL BUILDERS (Same as Telegram Bot)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def build_flipkart_url(query: str, brand: str = None, price_min: int = 0, 
+                       price_max: int = 999999, discount: int = 0) -> str:
+    """Build Flipkart URL with accurate filters"""
+    search_terms = []
+    if brand and brand.lower() not in ["all", "all brands", ""]:
+        search_terms.append(brand)
+    search_terms.append(query)
+    q = urllib.parse.quote(" ".join(search_terms))
+    
+    url = f"https://www.flipkart.com/search?q={q}"
+    
+    if price_max < 999999:
+        url += f"&p%5B%5D=facets.price_range.from%3D{price_min}"
+        url += f"&p%5B%5D=facets.price_range.to%3D{price_max}"
+    
+    if discount:
+        url += f"&p%5B%5D=facets.discount_range%5B%5D%3D{discount}%25+or+more"
+    
+    url += "&sort=popularity"
+    return url
+
+def build_myntra_url(search: str, brand: str = None, price_min: int = 0,
+                     price_max: int = 999999, discount: int = 0, color: str = None) -> str:
+    """Build Myntra URL with accurate filters"""
+    search_path = search.lower().replace(" ", "-").replace("'", "")
+    url = f"https://www.myntra.com/{search_path}"
+    
+    params = []
+    
+    if brand and brand.lower() not in ["all", "all brands", ""]:
+        params.append(f"f=Brand%3A{urllib.parse.quote(brand)}")
+    
+    if price_max < 999999:
+        params.append(f"price={price_min}%2C{price_max}")
+    
+    if discount:
+        params.append(f"discount={discount}%3A100")
+    
+    if color and color.lower() != "any":
+        params.append(f"f=Color%3A{urllib.parse.quote(color)}")
+    
+    params.append("sort=popularity")
+    
+    if params:
+        url += "?" + "&".join(params)
+    
+    return url
+
+async def to_affiliate(url: str) -> str:
+    """Convert URL to affiliate link using EarnKaro API (same as bot)"""
+    
+    # Method 1: EarnKaro API (primary - works for all stores)
+    if EARNKARO_TOKEN:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(
+                    "https://ekaro.in/api/generateLink",
+                    json={"originalLink": url},
+                    headers={
+                        "Authorization": f"Bearer {EARNKARO_TOKEN}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Check different response formats
+                    converted = (
+                        data.get("data", {}).get("convertedLink") or
+                        data.get("data", {}).get("link") or
+                        data.get("convertedLink") or
+                        data.get("link")
+                    )
+                    if converted:
+                        return converted
+        except Exception as e:
+            print(f"EarnKaro API error: {e}")
+    
+    # Method 2: Flipkart Direct Affiliate (fallback for Flipkart)
+    if "flipkart.com" in url and FK_AFFILIATE_ID:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}affid={FK_AFFILIATE_ID}&affExtParam1={FK_AFFEXT_ID}"
+    
+    # Fallback: Return original URL with tracking
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}utm_source=desideals_web"
 
 app = FastAPI(
     title="Smart Product Finder API",
@@ -235,6 +334,67 @@ async def convert_to_affiliate_get(url: str = Query(..., description="URL to con
     """Convert any URL to EarnKaro affiliate link (GET version)"""
     request = ConvertRequest(url=url)
     return await convert_to_affiliate(request)
+
+
+@app.post("/generate-link")
+async def generate_direct_link(request: DirectLinkRequest):
+    """Generate direct product link with filters (same as bot)"""
+    try:
+        if request.store.lower() == "myntra":
+            url = build_myntra_url(
+                search=request.query,
+                brand=request.brand,
+                price_min=request.price_min,
+                price_max=request.price_max,
+                discount=request.discount,
+                color=request.color
+            )
+        else:  # flipkart
+            url = build_flipkart_url(
+                query=request.query,
+                brand=request.brand,
+                price_min=request.price_min,
+                price_max=request.price_max,
+                discount=request.discount
+            )
+        
+        # Convert to affiliate
+        affiliate_url = await to_affiliate(url)
+        
+        return {
+            "success": True,
+            "original_url": url,
+            "affiliate_url": affiliate_url,
+            "store": request.store
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+
+@app.get("/generate-link")
+async def generate_direct_link_get(
+    store: str = Query(..., description="Store: flipkart or myntra"),
+    query: str = Query(..., description="Search query"),
+    brand: Optional[str] = Query(None, description="Brand filter"),
+    price_min: Optional[int] = Query(0, description="Minimum price"),
+    price_max: Optional[int] = Query(999999, description="Maximum price"),
+    discount: Optional[int] = Query(0, description="Minimum discount"),
+    color: Optional[str] = Query(None, description="Color filter (Myntra only)")
+):
+    """Generate direct product link with filters - GET version"""
+    request = DirectLinkRequest(
+        store=store,
+        query=query,
+        brand=brand,
+        price_min=price_min,
+        price_max=price_max,
+        discount=discount,
+        color=color
+    )
+    return await generate_direct_link(request)
 
 
 # For running with: python main.py
