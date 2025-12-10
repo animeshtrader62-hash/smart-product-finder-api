@@ -10,6 +10,7 @@ import re
 
 # EarnKaro API Configuration
 EARNKARO_TOKEN = os.getenv("EARNKARO_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTM0MDg5MzlkOTM5ZWQyMDI5YTZhZTkiLCJlYXJua2FybyI6IjQ3MTI3OTAiLCJpYXQiOjE3NjUwMTgzMDR9.CV4yf6iQ2IZ2RHv8FIWbzHROu4bnV1RRvgTa_JmvSFI")
+EARNKARO_API_URL = "https://ekaro.in/api/generateLink"
 FK_AFFILIATE_ID = os.getenv("FK_AFFILIATE_ID", "desideals")
 FK_AFFEXT_ID = os.getenv("FK_AFFEXT_ID", "ext1")
 
@@ -302,38 +303,12 @@ def get_product(product_id: int):
 async def convert_to_affiliate(request: ConvertRequest):
     """Convert any URL to EarnKaro affiliate link"""
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            headers = {
-                'Authorization': f'Bearer {EARNKARO_API["token"]}',
-                'Content-Type': 'application/json'
-            }
-            payload = {
-                'deal': request.url,
-                'convert_option': 'convert_only'
-            }
-            
-            response = await client.post(EARNKARO_API['url'], headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success') == 1:
-                    return {
-                        "success": True,
-                        "affiliate_url": data.get('data', request.url),
-                        "original_url": request.url
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "message": data.get('message', 'Conversion failed'),
-                        "original_url": request.url
-                    }
-            else:
-                return {
-                    "success": False,
-                    "message": f"API error: {response.status_code}",
-                    "original_url": request.url
-                }
+        affiliate_url = await to_affiliate(request.url)
+        return {
+            "success": True,
+            "affiliate_url": affiliate_url,
+            "original_url": request.url
+        }
     except Exception as e:
         return {
             "success": False,
