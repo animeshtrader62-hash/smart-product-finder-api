@@ -25,9 +25,9 @@ class DirectLinkRequest(BaseModel):
     discount: Optional[int] = 0
     color: Optional[str] = None
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════
 # URL BUILDERS (Same as Telegram Bot)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════
 def build_flipkart_url(query: str, brand: str = None, price_min: int = 0, 
                        price_max: int = 999999, discount: int = 0) -> str:
     """Build Flipkart URL with accurate filters"""
@@ -73,6 +73,33 @@ def build_myntra_url(search: str, brand: str = None, price_min: int = 0,
     
     if params:
         url += "?" + "&".join(params)
+    
+    return url
+
+def build_ajio_url(query: str, brand: str = None, price_min: int = 0,
+                   price_max: int = 999999, discount: int = 0) -> str:
+    """Build Ajio URL with filters"""
+    # Ajio uses path-based search
+    search_path = query.lower().replace(" ", "-")
+    url = f"https://www.ajio.com/search/?text={urllib.parse.quote(query)}"
+    
+    # Add filters as URL params
+    params = []
+    
+    if brand and brand.lower() not in ["all", "all brands", ""]:
+        params.append(f"brand={urllib.parse.quote(brand)}")
+    
+    if price_max < 999999:
+        params.append(f"minprice={price_min}")
+        params.append(f"maxprice={price_max}")
+    
+    if discount:
+        params.append(f"discount={discount}")
+    
+    params.append("sortby=discount-desc")
+    
+    if params:
+        url += "&" + "&".join(params)
     
     return url
 
@@ -340,7 +367,9 @@ async def convert_to_affiliate_get(url: str = Query(..., description="URL to con
 async def generate_direct_link(request: DirectLinkRequest):
     """Generate direct product link with filters (same as bot)"""
     try:
-        if request.store.lower() == "myntra":
+        store = request.store.lower()
+        
+        if store == "myntra":
             url = build_myntra_url(
                 search=request.query,
                 brand=request.brand,
@@ -349,7 +378,15 @@ async def generate_direct_link(request: DirectLinkRequest):
                 discount=request.discount,
                 color=request.color
             )
-        else:  # flipkart
+        elif store == "ajio":
+            url = build_ajio_url(
+                query=request.query,
+                brand=request.brand,
+                price_min=request.price_min,
+                price_max=request.price_max,
+                discount=request.discount
+            )
+        else:  # flipkart (default)
             url = build_flipkart_url(
                 query=request.query,
                 brand=request.brand,
