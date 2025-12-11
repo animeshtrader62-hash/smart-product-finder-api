@@ -148,12 +148,19 @@ async def to_affiliate(url: str) -> str:
                         data.get("convertedLink") or
                         data.get("link")
                     )
-                    if converted:
-                        return converted
+                    # Validate the converted link is actually a store URL, not EarnKaro redirect
+                    if converted and isinstance(converted, str):
+                        # Check if it's a valid affiliate link (should contain store domain or ekaro)
+                        valid_domains = ['flipkart.com', 'myntra.com', 'ajio.com', 'amazon.', 'ekaro.in', 'fkrt.it', 'amzn.to']
+                        if any(domain in converted.lower() for domain in valid_domains):
+                            return converted
+                        # If link doesn't contain valid domain, fall through to fallback
+                        print(f"EarnKaro returned unexpected URL: {converted}")
         except Exception as e:
             print(f"EarnKaro API error: {e}")
     
     # Method 2: Flipkart Direct Affiliate (fallback for Flipkart)
+    if "flipkart.com" in url and FK_AFFILIATE_ID:
     if "flipkart.com" in url and FK_AFFILIATE_ID:
         separator = "&" if "?" in url else "?"
         return f"{url}{separator}affid={FK_AFFILIATE_ID}&affExtParam1={FK_AFFEXT_ID}"
