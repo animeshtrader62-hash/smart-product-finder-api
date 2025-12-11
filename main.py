@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from typing import Optional
 from pydantic import BaseModel
 import json
@@ -7,6 +8,39 @@ import os
 import httpx
 import urllib.parse
 import re
+import time
+from collections import defaultdict
+
+# ═══════════════════════════════════════════════════════════════
+# RATE LIMITING
+# ═══════════════════════════════════════════════════════════════
+class RateLimiter:
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.requests = defaultdict(list)
+    
+    def is_allowed(self, client_ip: str) -> bool:
+        now = time.time()
+        minute_ago = now - 60
+        
+        # Clean old requests
+        self.requests[client_ip] = [t for t in self.requests[client_ip] if t > minute_ago]
+        
+        if len(self.requests[client_ip]) >= self.requests_per_minute:
+            return False
+        
+        self.requests[client_ip].append(now)
+        return True
+    
+    def cleanup(self):
+        """Remove old entries to prevent memory leak"""
+        now = time.time()
+        minute_ago = now - 60
+        to_delete = [ip for ip, times in self.requests.items() if all(t < minute_ago for t in times)]
+        for ip in to_delete:
+            del self.requests[ip]
+
+rate_limiter = RateLimiter(requests_per_minute=60)
 
 # EarnKaro API Configuration
 EARNKARO_TOKEN = os.getenv("EARNKARO_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTM0MDg5MzlkOTM5ZWQyMDI5YTZhZTkiLCJlYXJua2FybyI6IjQ3MTI3OTAiLCJpYXQiOjE3NjUwMTgzMDR9.CV4yf6iQ2IZ2RHv8FIWbzHROu4bnV1RRvgTa_JmvSFI")
@@ -134,22 +168,70 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow frontend (Netlify/GitHub Pages) to call this API
+# Allowed origins for CORS (more secure than "*")
+ALLOWED_ORIGINS = [
+    "https://animeshtrader62-hash.github.io",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+    "https://smart-deal-finder.netlify.app",  # If using Netlify
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your actual frontend URL
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Accept"],
 )
 
-# Load products from JSON file
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    
+    if not rate_limiter.is_allowed(client_ip):
+        return JSONResponse(
+            status_code=429,
+            content={"success": False, "message": "Too many requests. Please wait."}
+        )
+    
+    response = await call_next(request)
+    return response
+
+# Load products from JSON file (cached)
+_products_cache = None
+_products_loaded_time = 0
+
 def load_products():
+    global _products_cache, _products_loaded_time
+    
+    # Cache for 10 minutes
+    if _products_cache and (time.time() - _products_loaded_time) < 600:
+        return _products_cache
+    
     json_path = os.path.join(os.path.dirname(__file__), "products.json")
     with open(json_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        _products_cache = json.load(f)
+        _products_loaded_time = time.time()
+    return _products_cache
 
+# Initial load
 PRODUCTS = load_products()
+
+
+# ═══════════════════════════════════════════════════════════════
+# INPUT SANITIZATION
+# ═══════════════════════════════════════════════════════════════
+def sanitize_input(text: str, max_length: int = 200) -> str:
+    """Sanitize user input to prevent injection attacks"""
+    if not text:
+        return ""
+    # Remove dangerous characters and limit length
+    text = re.sub(r'[<>\"\\;{}|]', '', text)
+    text = text.strip()[:max_length]
+    return text
 
 
 @app.get("/")
@@ -170,10 +252,10 @@ def home():
 
 @app.get("/search")
 def search_products(
-    q: Optional[str] = Query(None, description="Full text search query"),
+    q: Optional[str] = Query(None, description="Full text search query", max_length=200),
     platform: Optional[str] = Query(None, description="Platform: Flipkart, Myntra, Ajio"),
-    category: Optional[str] = Query(None, description="Category: Smartphones, Laptops, Shoes, etc."),
-    brand: Optional[str] = Query(None, description="Brand name"),
+    category: Optional[str] = Query(None, description="Category: Smartphones, Laptops, Shoes, etc.", max_length=100),
+    brand: Optional[str] = Query(None, description="Brand name", max_length=100),
     min_price: Optional[int] = Query(None, description="Minimum price", ge=0),
     max_price: Optional[int] = Query(None, description="Maximum price", ge=0),
     min_discount: Optional[int] = Query(None, description="Minimum discount percentage", ge=0, le=100),
@@ -185,7 +267,20 @@ def search_products(
     Search products with multiple filters and full-text search.
     Returns matching products with affiliate links.
     """
-    results = PRODUCTS.copy()
+    # Refresh products cache if needed
+    products = load_products()
+    results = products.copy()
+    
+    # Sanitize inputs
+    q = sanitize_input(q) if q else None
+    platform = sanitize_input(platform, 20) if platform else None
+    category = sanitize_input(category, 100) if category else None
+    brand = sanitize_input(brand, 100) if brand else None
+    
+    # Validate sort_by
+    valid_sorts = ["price_low", "price_high", "discount", "rating", None]
+    if sort_by not in valid_sorts:
+        sort_by = None
     
     # Full-text search across title, brand, category, description
     if q:
